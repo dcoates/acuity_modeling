@@ -1,0 +1,20 @@
+# Patient data: contains MRNs
+*.xlsx
+
+# Generated traces: regenerate with the fit scripts
+*.nc
+
+# Older notebooks: outputs may contain MRNs
+raw_data.ipynb
+Untitled.ipynb
+Untitled1.ipynb
+ding_sperling_evaluation.ipynb
+ding_sperling_evaluation_decimal.ipynb
+ding_sperling_simple_model.ipynb
+ding_sperling_summary.ipynb
+
+# Distribution plots
+record_types_*
+
+__pycache__/
+.ipynb_checkpoints/
