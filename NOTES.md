@@ -56,7 +56,7 @@ Notes on running:
 
 **Normal recording mixture (fit_normal_mixture.py):** latent better-eye logMAR ~ Normal(m, s); records are line-only or letter form, with a recording rule. Results (ages 20–50, idiff ≤ 0.1):
 - Mean about −0.037 (roughly 20/18), SD about 0.064, line-only share about 0.66.
-- Your target (mean −0.086, SD 0.095) is not supported.
+- The user's target (mean −0.086, SD 0.095) is for **binocular** acuity, not the better eye, so this better-eye comparison doesn't test it. The 2D Ding & Sperling fit (`fit_person_eyes2d.py`) gives typical binocular −0.085, SD 0.076.
 - Fitted SD depends on the line window (0.067 at ±0.025, 0.059 at ±0.095).
 
 **Healthy-only truncated fit (fit_healthy_truncated.py, records ≤ 0.10):** mean −0.040, SD 0.055 (letter window ±0.01). The ±0.095 letter window collapses the SD to about 0.02, so it is not usable.
@@ -81,7 +81,67 @@ Notes on running:
 
 Left and right eyes share a rule: their record table is symmetric (Bowker p = 0.18 at idiff ≤ 0.1; p = 0.016 with no idiff filter, leaning slightly to the right eye around 20/15–20/20).
 
-**Reference fit is now `bin_indep`** (see "Why does binocular differ?" below): one shared rule, binocular independent. person_model_distributions.ipynb and the record_types_monocular/binocular figures use it. `record_types_by_reading` is out of date.
+**`bin_indep` is the fit used by person_model_distributions.ipynb and the record_types_monocular/binocular figures, but it has a known flaw:** independence can't reproduce how closely binocular records follow the eyes. All three bare 20/15: 381 observed, 183 modelled. The line-only boundary `b1` goes to its −0.25 limit to compensate, and stays there at idiff ≤ 0.2 and with no filter, so the idiff filter is not the main cause.
+
+`bin_slope` is the same shared rule with a free binocular mean, SD and correlation (0.85), so it assumes no particular gain. It reproduces those visits (382 vs 381; all bare 20/20 788 vs 781), with log-likelihood −11342.9 against −12404.5 for `bin_indep` on the same data. Monocular −0.050 / 0.079, binocular −0.090 / 0.085, `b1` −0.169. Its remaining misfits are one eye bare 20/15 with the other bare 20/20 (45 vs 0, removed by the idiff filter) and binocular 20/20+ (156 vs 68). Compared with `bin_slope`, a separate binocular rule (`visit_lines_bin`) gains about +107 for 8 extra parameters, so the +55 evidence below understates the rule question.
+
+Correlated fit by filter (idiff ≤ 0.1 / ≤ 0.2 / none): `b1` −0.169 / −0.152 / −0.137, so the filter does affect it; monocular mean −0.050 / −0.049 / −0.047, SD 0.079 / 0.080 / 0.081; binocular mean −0.090 / −0.090 / −0.088, SD 0.085 / 0.084 / 0.083; correlation 0.85 / 0.87 / 0.88; `sigma_eye` 0.023 / 0.033 / 0.039. One eye bare 20/15 with the other bare 20/20 is over-predicted once visible (113 vs 69 at ≤ 0.2, 183 vs 69 with no filter), so a single Normal for eye differences is too simple: `sigma_eye` grows to absorb a few large differences.
+
+**Left and right only (`eyes_*`, binocular left out of the likelihood):**
+- One Normal for eye differences: idiff ≤ 0.2 gives mean −0.045, reading SD 0.076, `b1` −0.170; no filter gives −0.054, 0.090, `b1` −0.230. Bare + bare patterns fit well (one eye bare 20/15 and the other bare 20/20: 69 vs 69), so the over-prediction above came from including binocular. `b1` stays past 20/15 without binocular, so binocular independence wasn't its only cause.
+- Two-part eye differences (`eyes_mix_*`): log-likelihood +117 at idiff ≤ 0.2 and +272 with no filter for 2 parameters, and it makes the filter matter far less (mean −0.038 / −0.042, person SD 0.055 / 0.058, reading SD about 0.063 / 0.070). But its limits are hit: `sigma_eye` at 0.005 (floor), `u_eye` 0.28 near its 0.3 cap at idiff ≤ 0.2. Most visits have nearly identical eye readings (L-R correlation 0.99 among them), which may be real or clinician anchoring. Not separated. Still misses bare 20/20 + 20/20 minus (about 180 vs 319).
+
+- With wide limits and a 0.002 grid (`eyes_wide_*`, set `BINOC_GRID=0.002`), no limits are hit. No filter: mean −0.041, person SD 0.058, reading SD 0.070, small-part SD 0.007, 76% of eyes small, large-part SD 0.080. Nearly unchanged from `eyes_mix_nofilter`, so that fit was sound. idiff ≤ 0.2: mean −0.030, person SD 0.051, reading SD 0.058, small-part SD 0.003, 68% small. The small-part SD is well under one letter (0.02), so it is too small to be test–retest noise. Clinicians recording the second eye like the first is the likely reading, but this is untested. `eyes_wide_nofilter` is the suggested left/right reference.
+
+person_model_distributions.ipynb and `record_types_monocular` now use `eyes_wide_nofilter` (left and right only, no filter). `record_types_binocular` and `record_types_by_reading` are out of date.
+
+**Ding & Sperling Model 2 on ages 20–50 (`fit_ding_sperling_typical.py`, recorded values, no recording model):**
+- All 3,605 rows: ε 7.03, γ 2.00, σ 0.046, RMSE 0.046, bias −0.002.
+- idiff ≤ 0.2 (3,509): ε 7.07, γ 2.16, RMSE 0.046.
+- Both eyes ≤ 0.3 (3,483): ε 7.37, γ 3.92, σ 0.042, RMSE 0.043.
+- ε is stable; γ is not, because it is set mostly by the few poorer eyes. The mean binocular value is predicted well in all three (bias under 0.002).
+- Through the recording rule (`ding_sperling_through_rule.py`): simulated left/right readings from `eyes_wide_nofilter`, combined by Ding & Sperling and recorded with the eyes' rule and visit style, do not match binocular records. There are too few bare 20/15 (905–1,022 vs 1,227) and two to three times too many 20/20+ (176–246 vs 73). Eyes bare 20/20 with binocular bare 20/15 is 0–73 vs 202, because `b1` at −0.227 leaves almost no binocular readings below it on line-only visits. Implied binocular reading mean −0.061 to −0.063. Best case (noise 0.046) misplaces 8.6% of records. ε and γ were fitted to recorded values, so the 20/15 ceiling may make them understate summation.
+
+**Ding & Sperling inside the record model (`ds_nofilter`, `BINOC_CHAINS=20 BINOC_GRID=0.002`, 34 min):** left and right with two-part differences, binocular = Ding & Sperling of the person value (both eyes taken as equal, so binocular noise absorbs unequal eyes), one shared rule, no filter. R-hat ≤ 1.009, no divergences, log-likelihood −13512.0 (−13846.4 for `bin_slope_nofilter` on the same data).
+- `b1` −0.141 (−0.158 to −0.120), close to 20/15 for the first time. The eye small-part SD is 0.013 (82% of eyes), no longer implausibly small.
+- ε 5.3, γ 0.28 (0.02 to 0.70): binocular gain is nearly constant, about 0.035 logMAR at the mean. γ is far lower than the 2.0 fitted to recorded values.
+- Typical monocular −0.049 / 0.069, better eye −0.056 / 0.069, binocular −0.084 / 0.076.
+- Binocular records misplaced 5.3% (8.6% at best for the earlier forward simulation). Remaining misfits: binocular 20/20+ 161 vs 73; one eye bare 20/15 and the other bare 20/20 149 vs 69; eyes bare 20/20 + 20/20 minus 175 vs 319.
+
+**Each eye's own acuity, with Ding & Sperling (`fit_person_eyes2d.py`, 2D grid of left/right true acuity at 0.01 steps, 20 chains, 74 min):** true acuity = person value + eye difference (two parts); readings add test noise; binocular = Ding & Sperling of the two eyes' true acuities, plus noise. One shared rule, style per visit, no filter. R-hat ≤ 1.006, no divergences, log-likelihood −13504.8 (−13512.0 for the shortcut `ds_nofilter`).
+- ε 4.77, γ 1.87 (1.46 to 2.25), close to the γ of 2.0 fitted to recorded values. The shortcut's γ of 0.28 came from feeding Ding & Sperling the same value for both eyes.
+- `b1` −0.140 (−0.156 to −0.123), consistent with the 20/15 line.
+- Typical monocular −0.048 / 0.078, better eye −0.065 / 0.076, binocular −0.085 / 0.076. Binocular gain over the better eye 0.020.
+- Test noise 0.011 is at its 0.010 floor (set by the grid step), and the small eye difference is 0.004 (80% of eyes), so the eyes are still recorded very alike. `h20_better` 0.046 is near its 0.05 limit.
+- Binocular records misplaced 4.9%. Same remaining misfits as before: binocular 20/20+ 163 vs 73; one eye bare 20/15 and the other bare 20/20 150 vs 69; eyes bare 20/20 + 20/20 minus 176 vs 319.
+
+**Poor vision and large interocular differences included (`fit_person_eyes2d_full.py`, 20 chains, 95 min):** grid to +1.4 (0.01 steps to 0.4, then 0.03), each line 20/30 to 20/400 its own category (21 categories), no filter, poor-vision component. Did **not converge**: R-hat up to 1.24 (`b2`, `b3`), 1.16 (`u_eye`), ESS as low as 59; 0 divergences. Treat as a rough reference. Log-likelihood −14242.7. The wide eye part (σ_d2 0.31, 6% of eyes) absorbs the poor eyes, so "typical" monocular SD is 0.11. γ 1.01. Eyes differing by > 0.2: binocular minus better-eye record obs −0.007, model +0.028 (too much binocular loss). `check_unequal_eyes.py` gives the observed patterns: good better eye (≤ 20/25) with idiff > 0.1, binocular worse than the better eye in 25%, mean +0.009; within 0.05, worse in 10%, mean −0.017; poorer better eyes gain about 0.08–0.09 when the eyes are equal.
+
+**One-eye-worse component + sigmoid γ (`fit_person_eyes2d_ext.py asym+sig`, 20 chains, 154 min):** chains split into three modes. Per-chain log density: mode A (15 chains) −14230, a small poor-eye tail (v 0.012, shift 0.5); mode B (chains 1 and 17) **−14195**; mode C (3 chains) −14239, `b2` at its 0.15 limit. Pooled R-hat up to 1.43, so the pooled summary is meaningless. Mode B alone (2 chains, R-hat ≤ 1.006, 0 divergences), log-likelihood at posterior means −14116.7 (+126 over the baseline):
+- Eye differences come in three kinds: 69% near identical (σ 0.008), **25% one eye worse by 0.060 ± 0.034** (about three letters, eye at random), 5.6% wide symmetric (σ 0.36, the poor eyes). Interocular-difference bands now fit: > 0.1 obs 285 / model 320, > 0.2 92 / 81, > 0.3 70 / 65, > 0.5 17 / 23.
+- Sigmoid: γ 1.77 for good better eyes, falling to 0.78 by 0.5 logMAR (cutoff 0.26, τ 0.06). Binocular noise 0.044 rising to 0.145.
+- Mean −0.058, SD 0.071 for the person value. Typical binocular −0.104 (SD 0.107 because the wide part is included); gain 0.046 over a single eye, 0.023 over the better eye.
+- Binocular minus better eye, good better eye: diff 0 obs −0.022 / model −0.021; 0–0.1 −0.002 / −0.007; > 0.1 +0.007 / +0.015 (worse in 20% / 27%). So binocular loss for good eyes with a worse partner is already reproduced, slightly overstated; **no suppression term needed**. Poorer better eyes: the model still gives too little binocular benefit (diff 0–0.1 −0.084 / −0.056; > 0.1 −0.041 / −0.023).
+- Unchanged misfits: binocular 20/20+ 164 vs 73; one eye bare 20/15 and other bare 20/20 125 vs 69; bare 20/20 + 20/20 minus 199 vs 319. Binocular misplaced 4.6%.
+- To get mode B in every chain, `asym+sig+near` restricts the shift to 0.02–0.2 (s_w 0.01–0.1).
+
+**`asym+sig+near` (current best; `BINOC_CHAINS=24 BINOC_TUNE=700 BINOC_DRAWS=500`, 109 min, trace `person_eyes2d_asym_sig_near.nc`):** 23 of 24 chains in mode B (log density −14189); chain 10 is stuck in mode C (−14210, `b2`/`b3` high). Dropping chain 10: R-hat ≤ 1.003, ESS ≥ 4,900 for the checked parameters, 0 divergences, log-likelihood −14116.6. All estimates match mode B above to the third decimal (shift 0.057 ± 0.036 in 26% of people; γ 1.76 → 0.79, cutoff 0.26). When using the trace, drop chains whose mean `logp` is about 20 below the rest (`idata.sel(chain=[...])`; see the scratchpad's `report_mode.py` pattern: `ext.report(idata.sel(chain=keep), full.load_triples(), "asym+sig+near")`).
+
+Next things worth trying with this model: (1) the remaining binocular misfits (20/20+, 15/20 eye pairs, 20/20 + 20/20− eye pairs) may need recording style to vary within a visit, or the binocular letter windows to differ; (2) poorer better eyes still gain too little binocularly (model −0.055 vs obs −0.084 at diff 0–0.1, n = 21), a small group; (3) the notebook still uses `eyes_wide_nofilter` and should be pointed at this trace. (Done: the notebook now uses this trace.)
+
+**Without large eye differences (asym+sig+near, simulated, not poor and no wide part, 89% of people):** monocular −0.050 / 0.077, better eye −0.064 / 0.073, binocular −0.088 / 0.078. Binocular advantage over the better eye 0.024 (0.022–0.026), over the mean of the eyes 0.038 (0.035–0.041). Near-identical eyes only (64%): 0.028 / 0.036.
+
+**Applied without refitting to all ages:** per-visit log-likelihood 20–50 −3.92, 51–64 −4.30, < 20 −5.40, 65+ −6.05. Conditional log p(B | L, R) shortfall vs saturated 0.14, 0.29, 0.64, 0.52.
+
+**Age bands, ages 20+ only (`fit_person_eyes2d_age.py`; ages < 20 are never fitted).** Bands 20–50 (3,604 visits), 51–64 (1,266), 65+ (1,184). Population parameters per band; recording rule, test noise, σ_d and the one-eye shift shared. 12 chains, tune 700, draws 500; both 0 divergences, R-hat ≤ 1.03 (worst: 65+ poor-vision parameters).
+- `shared` (Ding & Sperling shared, 3.7 h): log-likelihood 20–50 −14140.1, 51–64 −5328.9, 65+ −6395.0 (untrained −5444.9, −7167.6). Conditional log p(B | L, R) −0.972 / −0.975 / −1.344 (saturated −0.836 / −0.706 / −0.889). With age: mean −0.058, −0.040, +0.023; SD about 0.075 in every band; wide-difference share 6%, 16%, 23%; one-eye-worse share 30%, 37%, 48% (at its 0.5 limit). Shared DS: γ 1.36 → 0.89, cutoff 0.14, σ_bin 0.046 → 0.130.
+- `dsage` (ε, γ low/high, σ_bin low/high per band, 5.5 h): log-likelihood −14131.7, −5328.4, −6385.3, so +18.6 for 10 extra parameters; conditional −0.970 / −0.975 / −1.337, essentially unchanged. ε 4.3, 5.2, 6.6; γ_low about 1.6 in all bands; σ_bin_high 0.12, 0.19, 0.16. Age is in the eye distributions, not in how the eyes combine.
+- Binocular minus better eye for equal eyes, better ≤ 20/25: obs −0.022 / −0.016 / −0.017, model about −0.020 in each band. Older bands lose overall gain only because more of them have unequal eyes. The model over-predicts binocular 20/15 at 65+ (180 vs 110).
+- Unequal or poor eyes (scratchpad `bad_eyes.py`, pooled 20+): with the better eye ≤ 20/25 the mean B − better matches within 0.01 at every difference (0.1–0.3 +0.010 / +0.018, 0.3–0.6 +0.016 / +0.018), but the spread is too narrow for differences > 0.3 (SD 0.067 vs 0.053; > 0.6 0.096 vs 0.050, a few 65+ visits with B well below the better eye). With the better eye 20/30–20/40 the model is too noisy and too pessimistic: equal eyes SD 0.070 vs 0.106, B worse than better 2% vs 15%; difference 0.1–0.3 −0.029 vs −0.006. `dsage` does not fix this. The binocular record is rarely recorded worse than an equal poor better eye, which symmetric binocular noise cannot reproduce.
+
+**Progress output:** `sampling_progress.py` is used by `fit_person_records.py` and `fit_person_eyes2d.py`. Long runs print `[progress]` lines to stdout every `BINOC_REPORT_EVERY` seconds (default 60): tuning or sampling, percent done, slowest and fastest chain, divergences, minutes left. `BINOC_DRAWS` and `BINOC_TUNE` shorten a pilot run.
+
+`record_types_by_reading` is out of date.
 
 **Binocular's own rule (`visit_lines_bin`, set `BINOC_CHAINS=20` for one run alone; R-hat ≤ 1.010, 0 divergences, log-likelihood +109 for 9 extra parameters):** binocular records do not follow the eye rule around 20/15–20/20; near 20/25 the two rules agree within uncertainty.
 - Line-only visits: bare 20/20 starts at −0.146 for binocular, but −0.238 for eyes, near the prior limit of −0.25, so line-only eyes are almost never bare 20/15.

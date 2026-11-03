@@ -26,6 +26,7 @@ import pymc as pm
 import pytensor.tensor as pt
 from scipy.special import erf
 
+import sampling_progress
 from fit_ding_sperling_decimal_pymc import load_all_df
 
 HERE = Path(__file__).parent
@@ -33,7 +34,7 @@ AGE_LO, AGE_HI = 20, 50
 CATS = ["15 bare", "15-", "20+", "20 bare", "20-", "25+", "25 bare", "25-", ">=30"]
 L15, L20, L25, L30 = np.log10(np.array([15, 20, 25, 30]) / 20)
 MID = [(L15 + L20) / 2, (L20 + L25) / 2, (L25 + L30) / 2]   # letter records split here
-GRID = np.arange(-0.4, 0.8, 0.004)
+GRID = np.arange(-0.4, 0.8, float(os.environ.get("BINOC_GRID", 0.004)))
 BIG = 10.0
 CORES = int(os.environ.get("BINOC_CHAINS", 7))  # chains per run, one core each; 7 lets three runs share 24
 PARAMS = ["mean_logmar", "sd_logmar", "sigma_eye", "sigma_bin", "delta_bin", "p_line_style",
@@ -42,10 +43,11 @@ SPLITS = ["c1", "c2", "h15", "h20_better", "h20_worse", "h25",  # optional: lett
           "h15_bin", "h20_better_bin", "h20_worse_bin", "h25_bin",  # optional: binocular's own rule
           "b1_bin", "b2_bin", "b3_bin", "c1_bin", "c2_bin", "slope_bin", "xi_bin",
           "lam_bin", "bin_shift", "sigma_bin2", "w_typ2", "pop_shift", "s_typ2", "m_bin", "s_bin",
-          "w_poor_bin", "gap_bin", "s_poor_bin"]
+          "w_poor_bin", "gap_bin", "s_poor_bin", "u_eye", "sigma_eye2", "ds_eps", "ds_gamma"]
+EYES_ONLY = False     # set by main: leave binocular records out of the likelihood
 PER_LINE = ("lines", "lines_bin", "bin_ceiling", "bin_20", "bin_slope", "bin_style",
             "bin_mix", "bin_mix_sd", "pop_mix", "bin_indep", "bin_indep_mix", "bin_indep_sep",
-            "bin_indep_b1")
+            "bin_indep_b1", "eyes", "eyes_mix", "eyes_wide", "ds")
 
 
 def categorise(s):
@@ -89,6 +91,14 @@ def edges(p, stack):
     return line_lo, line_hi, let_lo, let_hi
 
 
+def eye_noise(p, rng, n):
+    """Eye deviations from the person value, one or two parts."""
+    sd = np.full(n, p["sigma_eye"])
+    if "u_eye" in p:
+        sd[rng.random(n) < p["u_eye"]] = p["sigma_eye2"]
+    return rng.normal(0, sd)
+
+
 def independent_binocular(p, rng, n):
     """Typical binocular readings drawn with no link to person acuity."""
     y = rng.normal(p["m_bin"], p["s_bin"], n)
@@ -98,8 +108,17 @@ def independent_binocular(p, rng, n):
     return y
 
 
+def ds_gain(mu, p):
+    """Ding & Sperling Model 2 binocular gain in logMAR when both eyes read mu."""
+    lib = np if isinstance(p["ds_eps"], float) else pt
+    a = p["ds_eps"] * lib.power(10.0, -p["ds_gamma"] * mu)    # eps * k ** gamma, k = 10 ** -mu
+    return lib.log10(2 * (1 + a) / (1 + 2 * a))
+
+
 def binocular_mean(mu, p):
     """Mean binocular reading for person acuity mu; slope 1 means a constant offset."""
+    if "ds_eps" in p:
+        return mu - ds_gain(mu, p)
     return p["mean_logmar"] + p["delta_bin"] + p.get("slope_bin", 1.0) * (mu - p["mean_logmar"])
 
 
@@ -109,8 +128,17 @@ def triple_lik(p, tr, by_visit, phi, stack, floor):
     bline_lo, bline_hi, blet_lo, blet_hi = edges(p.get("bin", p), stack)
     eye = GRID[:, None]
     bin_ = binocular_mean(GRID[:, None], p)
-    eye_line = floor(cat_probs(eye, p["sigma_eye"], line_lo[None, :], line_hi[None, :], phi))
-    eye_let = floor(cat_probs(eye, p["sigma_eye"], let_lo[None, :], let_hi[None, :], phi))
+
+    def eye_probs(lo, hi):
+        # Most eyes differ little from the person value; a share u_eye can differ a lot.
+        main = floor(cat_probs(eye, p["sigma_eye"], lo[None, :], hi[None, :], phi))
+        if "u_eye" not in p:
+            return main
+        wide = floor(cat_probs(eye, p["sigma_eye2"], lo[None, :], hi[None, :], phi))
+        return (1 - p["u_eye"]) * main + p["u_eye"] * wide
+
+    eye_line = eye_probs(line_lo, line_hi)
+    eye_let = eye_probs(let_lo, let_hi)
 
     def bin_probs(lo, hi):
         """Binocular record probabilities, from one offset or a mix of two."""
@@ -134,6 +162,8 @@ def triple_lik(p, tr, by_visit, phi, stack, floor):
     bin_let = bin_probs(blet_lo, blet_hi)
     L, R, B = tr["L"].to_numpy(), tr["R"].to_numpy(), tr["B"].to_numpy()
     pi = p["p_line_style"]
+    if EYES_ONLY:
+        return pi * eye_line[:, L] * eye_line[:, R] + (1 - pi) * eye_let[:, L] * eye_let[:, R]
     if by_visit:
         # xi: on a letter visit, the chance the binocular reading is still recorded line-only.
         xi = p.get("xi_bin", 0.0)
@@ -176,7 +206,8 @@ def fit(tr, by_visit, free_split=False):
             # Bounds keep the typical component on the grid and away from a zero-width spike.
             "mean_logmar": pm.Uniform("mean_logmar", lower=-0.25, upper=0.05),
             "sd_logmar": pm.Uniform("sd_logmar", lower=0.01, upper=0.2),
-            "sigma_eye": pm.Uniform("sigma_eye", lower=0.005, upper=0.15),
+            "sigma_eye": (pm.Uniform("sigma_eye", lower=0.001, upper=0.04) if free_split in ("eyes_wide", "ds")
+                          else pm.Uniform("sigma_eye", lower=0.005, upper=0.15)),
             "sigma_bin": pm.Uniform("sigma_bin", lower=0.005, upper=0.15),
             "delta_bin": pm.Normal("delta_bin", mu=0.0, sigma=0.05),
             "p_line_style": pm.Beta("p_line_style", alpha=1.0, beta=1.0),
@@ -203,6 +234,17 @@ def fit(tr, by_visit, free_split=False):
             elif free_split == "bin_20":        # binocular differs only in the 20/20 letter window
                 p["bin"] = {**p, "h20_better": pm.Uniform("h20_better_bin", lower=0.005, upper=0.05),
                             "h20_worse": pm.Uniform("h20_worse_bin", lower=0.005, upper=0.05)}
+            elif free_split == "ds":            # two-part eyes; binocular from Ding & Sperling
+                p["u_eye"] = pm.Uniform("u_eye", lower=0.0, upper=0.95)
+                p["sigma_eye2"] = pm.Uniform("sigma_eye2", lower=0.04, upper=0.4)
+                p["ds_eps"] = pm.Uniform("ds_eps", lower=0.1, upper=50.0)
+                p["ds_gamma"] = pm.Uniform("ds_gamma", lower=0.0, upper=8.0)
+            elif free_split == "eyes_wide":     # two-part, with wide limits
+                p["u_eye"] = pm.Uniform("u_eye", lower=0.0, upper=0.95)
+                p["sigma_eye2"] = pm.Uniform("sigma_eye2", lower=0.04, upper=0.4)
+            elif free_split == "eyes_mix":      # two-part eye differences
+                p["u_eye"] = pm.Uniform("u_eye", lower=0.0, upper=0.3)
+                p["sigma_eye2"] = pm.Uniform("sigma_eye2", lower=0.05, upper=0.4)
             elif free_split in ("bin_indep", "bin_indep_mix", "bin_indep_sep", "bin_indep_b1"):
                 # Binocular has its own distribution, with no link to person acuity.
                 p["m_bin"] = pm.Uniform("m_bin", lower=-0.25, upper=0.05)
@@ -247,8 +289,8 @@ def fit(tr, by_visit, free_split=False):
         lik = triple_lik(p, tr, by_visit, phi, pt.stack, lambda x: pt.clip(x, 1e-10, 1.0))
         weights = pop_weights(p, pt.exp, pt.sum)
         pm.Potential("record_loglik", pt.sum(n * pt.log(pt.dot(weights, lik))))
-        return pm.sample(draws=800, tune=1500, chains=CORES, cores=CORES, target_accept=0.95,
-                         nuts_sampler="nutpie", random_seed=1, progressbar=False)
+        return sampling_progress.sample(pm.modelcontext(None), CORES, draws=800, tune=1500,
+                                        target_accept=0.95, nuts_sampler="nutpie", random_seed=1)
 
 
 def post_means(idata):
@@ -322,8 +364,8 @@ def simulate(p, n_person, by_visit, seed=1):
     styles = ([visit, visit, visit | (rng.random(n_person) < p.get("xi_bin", 0.0))] if by_visit
               else [rng.random(n_person) < pi for _ in range(3)])
     return pd.DataFrame({
-        "L": record(mu + rng.normal(0, p["sigma_eye"], n_person), styles[0]),
-        "R": record(mu + rng.normal(0, p["sigma_eye"], n_person), styles[1]),
+        "L": record(mu + eye_noise(p, rng, n_person), styles[0]),
+        "R": record(mu + eye_noise(p, rng, n_person), styles[1]),
         "B": record(y_bin, styles[2], p.get("bin", p)),
     })
 
@@ -368,8 +410,10 @@ def typical_readings(p, n=1000000, seed=1):
 
 def report(name, idata, tr, by_visit):
     names = [v for v in PARAMS + SPLITS if v in idata.posterior]   # h_bare is absent per line
-    if "m_bin" in idata.posterior:      # these two aren't used when binocular is independent
+    if "m_bin" in idata.posterior or EYES_ONLY:     # these two aren't used then
         names = [v for v in names if v not in ("sigma_bin", "delta_bin")]
+    if "ds_eps" in idata.posterior:     # Ding & Sperling replaces the offset
+        names = [v for v in names if v != "delta_bin"]
     summary = az.summary(idata, var_names=names, round_to=4)
     print(f"\n===== {name} =====")
     print(summary[["mean", "sd", "hdi_3%", "hdi_97%", "ess_bulk", "r_hat"]].to_string())
@@ -386,6 +430,8 @@ def report(name, idata, tr, by_visit):
 
 
 def main(tag):
+    global EYES_ONLY
+    EYES_ONLY = tag.startswith("eyes")
     idiff_max, by_visit, free_split = {
         "visit": (0.1, True, False), "reading": (0.1, False, False),
         "visit_idiff0.2": (0.2, True, False), "visit_split": (0.1, True, True),
@@ -396,7 +442,15 @@ def main(tag):
         "bin_mix": (0.1, True, "bin_mix"), "bin_mix_sd": (0.1, True, "bin_mix_sd"),
         "pop_mix": (0.1, True, "pop_mix"), "bin_indep": (0.1, True, "bin_indep"),
         "bin_indep_mix": (0.1, True, "bin_indep_mix"), "bin_indep_sep": (0.1, True, "bin_indep_sep"),
-        "bin_indep_b1": (0.1, True, "bin_indep_b1")}[tag]
+        "bin_indep_b1": (0.1, True, "bin_indep_b1"),
+        "bin_indep_idiff0.2": (0.2, True, "bin_indep"),
+        "bin_indep_sep_idiff0.2": (0.2, True, "bin_indep_sep"),
+        "bin_indep_nofilter": (9.0, True, "bin_indep"),
+        "bin_slope_idiff0.2": (0.2, True, "bin_slope"), "bin_slope_nofilter": (9.0, True, "bin_slope"),
+        "eyes_idiff0.2": (0.2, True, "eyes"), "eyes_nofilter": (9.0, True, "eyes"),
+        "eyes_mix_idiff0.2": (0.2, True, "eyes_mix"), "eyes_mix_nofilter": (9.0, True, "eyes_mix"),
+        "eyes_wide_idiff0.2": (0.2, True, "eyes_wide"), "eyes_wide_nofilter": (9.0, True, "eyes_wide"),
+        "ds_nofilter": (9.0, True, "ds")}[tag]
     tr = load_triples(idiff_max)
     print(f"{tr['n'].sum()} persons, {len(tr)} distinct record triples", flush=True)
     idata = fit(tr, by_visit, free_split)
