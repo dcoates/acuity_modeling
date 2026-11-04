@@ -16,6 +16,11 @@ Options (combine with "+", e.g. "shared+dnoise"):
   dnoise  binocular noise also grows with the true eye difference d:
           sd = sqrt(sigma_bin(better eye)^2 + (k_diff * d)^2), k_diff shared.
   tnoise  eye-test noise grows for poorer eyes: sigma_test + k_test * max(a - 0.1, 0), k_test shared.
+  tsig    eye-test noise rises along a sigmoid from sigma_test to sigma_test_high, centred at t_mid
+          with width t_tau (all shared), so it levels off for very poor eyes.
+  tstep   eye-test noise steps from sigma_test to sigma_test_high above logMAR 0.15 (between 20/25
+          and 20/30); the step's place is fixed, as tsig made it a step there but could not converge.
+  poorshared  the poor-vision gap and SD are shared by all bands; only its share varies by band.
 
 Usage: python fit_person_eyes2d_age.py shared+dnoise      (BINOC_CHAINS sets the number of chains)
 """
@@ -67,22 +72,29 @@ PRIORS = {
     "sigma_bin_high": (U, dict(lower=0.01, upper=0.4)),
     "cutoff": (U, dict(lower=0.0, upper=1.0)),
 }
-EXTRA = {"dnoise": ("k_diff", (U, dict(lower=0.0, upper=1.0))),
-         "tnoise": ("k_test", (U, dict(lower=0.0, upper=1.0)))}
+EXTRA = {"dnoise": {"k_diff": (U, dict(lower=0.0, upper=1.0))},
+         "tnoise": {"k_test": (U, dict(lower=0.0, upper=1.0))},
+         "tsig": {"sigma_test_high": (U, dict(lower=0.02, upper=0.3)),
+                  "t_mid": (U, dict(lower=0.1, upper=0.6)),
+                  "t_tau": (U, dict(lower=0.02, upper=0.2))},
+         "tstep": {"sigma_test_high": (U, dict(lower=0.02, upper=0.3))}}
 
 
 def options(option):
     return option.split("+")
 
 
+def extra(option):
+    return {k: v for o in options(option) if o in EXTRA for k, v in EXTRA[o].items()}
+
+
 def priors(option):
-    out = dict(PRIORS)
-    out.update(dict(EXTRA[o] for o in options(option) if o in EXTRA))
-    return out
+    return {**PRIORS, **extra(option)}
 
 
 def varying(option):
-    return POP + (DS if "dsage" in options(option) else [])
+    pop = [k for k in POP if k not in ("gap", "s_poor")] if "poorshared" in options(option) else POP
+    return pop + (DS if "dsage" in options(option) else [])
 
 
 def load_bands():
@@ -156,7 +168,7 @@ def fit(bands, option):
 def names(option):
     vary = varying(option)
     return ([k for k in ext.names(OPTIONS) if k not in vary]
-            + [EXTRA[o][0] for o in options(option) if o in EXTRA]
+            + list(extra(option))
             + [f"{k}_{band}" for k in vary for band in BANDS])
 
 

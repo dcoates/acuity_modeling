@@ -85,11 +85,22 @@ def gamma_sigma(better, p, lib):
             p["sigma_bin_low"] + (p["sigma_bin_high"] - p["sigma_bin_low"]) * w)
 
 
+T_STEP = 0.15
+
+
 def test_sd(a, p, lib):
-    """Eye-test noise at true acuity a: sigma_test, rising by k_test per logMAR worse than 0.1."""
-    if "k_test" not in p:
-        return p["sigma_test"]
-    return p["sigma_test"] + p["k_test"] * lib.maximum(a - 0.1, 0.0)
+    """Eye-test noise at true acuity a: sigma_test, rising by k_test per logMAR worse than 0.1, or
+    along a sigmoid to sigma_test_high centred at t_mid with width t_tau, or stepping to
+    sigma_test_high above T_STEP (between 20/25 and 20/30)."""
+    if "sigma_test_high" in p and "t_mid" not in p:
+        return p["sigma_test"] + (p["sigma_test_high"] - p["sigma_test"]) * (np.asarray(a) > T_STEP)
+    if "t_mid" in p:
+        sig = (lambda z: 1 / (1 + np.exp(-z))) if lib is np else pt.sigmoid
+        w = sig((a - p["t_mid"]) / p["t_tau"])
+        return p["sigma_test"] + (p["sigma_test_high"] - p["sigma_test"]) * w
+    if "k_test" in p:
+        return p["sigma_test"] + p["k_test"] * lib.maximum(a - 0.1, 0.0)
+    return p["sigma_test"]
 
 
 def ding_sperling(a_l, a_r, p, lib):
